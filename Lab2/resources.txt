@@ -1,0 +1,7 @@
+https://threejs.org/docs/index.html#api/en/math/Vector3
+
+var u_normalized = u.clone().normalize(); 
+var cross_prod = new THREE.Vector3().crossVectors(u, v); // u x v
+var add_vector = new THREE.Vector3().addVectors(P, u); // P+u
+var sub_vector = new THREE.Vector3().subVectors(P, Q); // P-Q
+var vector_projection = w.clone().projectOnVector(u); // vector projection of w onto u
