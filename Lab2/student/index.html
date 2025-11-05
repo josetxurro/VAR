@@ -49,18 +49,34 @@ class DisplaySurface
         return mat;
     }
 	
-    projectionMatrix(eye, znear, zfar)
-    {
-		// to be written by you!
-        var left = -1;
-        var right = 1;
-        var bottom = -1;
-        var top = 1;
+    projectionMatrix(eye, znear, zfar) {
+        // Normalized wall axes
+        var u = this.u.clone().normalize();
+        var v = this.v.clone().normalize();
+        var n = new THREE.Vector3().crossVectors(u, v).normalize();
 
-        // to be written by you!
+        // Vectors from eye to three corners of the wall
+        var pa = this.origin.clone();            // lower-left corner (origin)
+        var pb = this.origin.clone().add(this.u); // lower-right (origin + u)
+        var pc = this.origin.clone().add(this.v); // upper-left  (origin + v)
 
-        return new THREE.Matrix4().makePerspective(left, right, top, bottom, znear, zfar);
+        var va = pa.clone().sub(eye);
+        var vb = pb.clone().sub(eye);
+        var vc = pc.clone().sub(eye);
+
+        // Distance from eye to screen (near plane)
+        var d = -va.dot(n);
+
+        // Frustum parameters at the near plane
+        var left   = va.dot(u) * znear / d;
+        var right  = vb.dot(u) * znear / d;
+        var bottom = va.dot(v) * znear / d;
+        var top    = vc.dot(v) * znear / d;
+
+        var projMat = new THREE.Matrix4().makePerspective(left, right, top, bottom, znear, zfar);
+        return projMat;
     }
+
 }
 
 
