@@ -13,13 +13,26 @@
 
 <!-- Check: https://threejs.org/docs/index.html#manual/en/introduction/Installation 
 for alternative installations -->
+<script type="importmap">
+    {
+        "imports": {
+        "three": "https://unpkg.com/three@0.139.2/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.139.2/examples/jsm/"
+        }
+    }
+</script>
 
-<script src="https://unpkg.com/three@0.139.2/build/three.min.js"></script>
-<script src="https://unpkg.com/three@0.139.2/examples/js/controls/OrbitControls.js"></script>
-<script src="https://unpkg.com/three@0.139.2/examples/js/controls/DragControls.js"></script>
-<script src="https://unpkg.com/three@0.139.2/examples/js/geometries/TeapotGeometry.js"></script>
 
-<script>
+<script type ="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { DragControls } from 'three/addons/controls/DragControls.js';
+    import { TeapotGeometry } from 'three/addons/geometries/TeapotGeometry.js';
+    import { VRButton } from 'three/addons/webxr/VRButton.js';
+    import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+    const clock = new THREE.Clock();
+
 class DisplaySurface 
 {
     constructor(name, origin, u_vector, v_vector) 
@@ -94,7 +107,7 @@ function addDragControlToObjects()
     
 	//console.log(objects); 
 	
-    var controls = new THREE.DragControls( objects, camera, renderer.domElement );
+    var controls = new DragControls( objects, camera, renderer.domElement );
     controls.addEventListener( 'hoveron', function ( event ) 
 		{
             orbitControl.enabled = false;
@@ -151,15 +164,17 @@ function createEyeScene()
 
 function createRenderer()
 {
-    renderer = new THREE.WebGLRenderer({preserveDrawingBuffer: true});
+    renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true});    
     renderer.autoClear = false; // we will do manual clearing, because of the two eyes rendering
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true;
+    document.body.appendChild(VRButton.createButton(renderer));
     document.body.appendChild(renderer.domElement);
 }
 
 function enableOrbitCamera(cam, renderer)
 {
-    orbitControl = new THREE.OrbitControls(cam, renderer.domElement );
+    orbitControl = new OrbitControls(cam, renderer.domElement );
     orbitControl.minDistance = 120;
     orbitControl.maxDistance = 50000;
 }
@@ -177,7 +192,7 @@ function createScene()
 {
     scene = new THREE.Scene();
 
-    var geometry = new THREE.TeapotGeometry( 40, 15);
+    var geometry = new TeapotGeometry( 40, 15);
     var material = new THREE.MeshPhongMaterial( { color: 0xffffff } );
     var teapot = new THREE.Mesh(geometry, material);
     teapot.name = "Teapot";
@@ -303,7 +318,7 @@ function cameraFromViewProj(view, proj)
 // refresh function
 var animate = function () {
     var gl = renderer.getContext();
-    requestAnimationFrame(animate);
+    renderer.setAnimationLoop(animate);
 
     // 1. render scene objects
 	renderer.setClearColor(0x808080);
