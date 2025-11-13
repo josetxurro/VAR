@@ -177,6 +177,8 @@ var showEyeFrustrum = 0; // 0 = off, 1 = left eye, 2 = right eye
 var frustumLines = [];
 var currentSurface = 0; // 0 = front, 1 = left, 2 = right, 3 = floor
 var controller1, controller2, controllerGrip1, controllerGrip2;
+var locomotion = [0, 0, 0];
+var dolly, dummyCam;
 let raycaster;
 var group;
 const intersected = [];
@@ -353,6 +355,14 @@ function createCamera()
     camera = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 10000 );
     camera.position.set( 100, 100, 300 );
     camera.lookAt( 0, 0, 0 );
+
+    dolly = new THREE.Object3D();
+    dolly.position.z = 5;
+    dolly.add(camera);
+    scene.add(dolly);
+
+    dummyCam = new THREE.Object3D();
+    camera.add(dummyCam);
 }
 
 function createDisplaySurfaces()
@@ -445,6 +455,58 @@ function setupControllers() {
     raycaster = new THREE.Raycaster();
 }
 
+function onJoystick() {
+    var handedness = "unknown";
+    const session = renderer.xr.getSession();
+
+    if (session) {
+        let xrCamera = renderer.xr.getCamera(camera);
+
+        for (const source of session.inputSources) {
+            if (source && source.handedness) {
+                handedness = source.handedness;
+            }
+            if (!source.gamepad) continue;
+
+            const data = {
+                handedness: handedness,
+                buttons: source.gamepad.buttons.map((b) => b.value),
+                axes: source.gamepad.axes.slice(2)
+            };
+            
+            if (data.handedness == "left") {
+                locomotion[0] = (Math.abs(data.axes[1]) > 0.4) ? data.axes[1] : 0.0;
+                locomotion[2] = (Math.abs(data.axes[0]) > 0.4) ? data.axes[0] : 0.0;
+            }
+            else if (data.handedness == "right") {
+                locomotion[1] = (Math.abs(data.axes[1]) > 0.4) ? data.axes[1] : 0.0;
+            }
+        }
+    }
+}
+
+function characterMove(dt) {
+    const session = renderer.xr.getSession();
+
+    if (session) {
+        const speed = 10;
+        
+        const quaternion = dolly.quaternion.clone();
+        const targetQuaternion = new THREE.Quaternion();
+        dolly.quaternion.copy(dummyCam.getWorldQuaternion(targetQuaternion));
+        
+        // Locomotion X/Z (left joystick) - relative to camera
+        dolly.translateZ(locomotion[0] * dt * speed);
+        dolly.translateX(locomotion[2] * dt * speed);
+        
+        // Restore original rotation before moving y
+        dolly.quaternion.copy(quaternion);
+        
+        // Locomotion Y (right joystick) - absolute
+        dolly.position.y += -locomotion[1] * dt * speed;
+    }
+}
+
 function onSelectStart(event) {
     const controller = event.target;
 
@@ -530,6 +592,8 @@ function cleanIntersected() {
 // refresh function
 var animate = function () {
     cleanIntersected();
+    onJoystick();
+    characterMove(clock.getDelta());
 
     if (renderer.xr.getSession()) {
         intersectObjects(controller1);
@@ -678,7 +742,7 @@ window.addEventListener( 'keydown', function ( event )
             break;
         
         case 'ArrowLeft':
-            console.log("LEFT");
+            characterMove();
             break;
 
         case 'ArrowUp':
