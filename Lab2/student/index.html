@@ -169,6 +169,8 @@ var eyeCenter, eyeScene;
 var orbitControl;
 var showScene = true;
 var tempMatrix = new THREE.Matrix4();
+var tempMatrix2 = new THREE.Matrix4();
+var selectionOffset = new THREE.Matrix4();
 var selectedObject = null;
 var grabbingController = null;
 var showEyeFrustrum = 0; // 0 = off, 1 = left eye, 2 = right eye
@@ -454,9 +456,16 @@ function onSelectStart(event) {
         const object = intersection.object;
         object.material.emissive.b = 1;
 
-        controller.attach(object);
+        // No reparenting: keep the object in its original scene hierarchy
+        controller.updateMatrixWorld(true);
+        object.updateMatrixWorld(true);
 
+        // Save selection and relative offset so object follows controller without changing parent
         controller.userData.selected = object;
+        selectedObject = object;
+        grabbingController = controller;
+        selectionOffset.copy(controller.matrixWorld).invert().multiply(object.matrixWorld);
+        selectedObject.matrixAutoUpdate = false;
     }
 
     controller.userData.targetRayMode = event.data.targetRayMode;
@@ -468,10 +477,18 @@ function onSelectEnd(event) {
     if ( controller.userData.selected !== undefined ) {
         const object = controller.userData.selected;
         object.material.emissive.b = 0;
-        group.attach( object );
+        // Ensure it remains under the main group (idempotent if already there)
+        if (object.parent !== group) group.attach( object );
 
         controller.userData.selected = undefined;
     }
+
+    // Restore object update behavior and clear selection state
+    if (selectedObject) {
+        selectedObject.matrixAutoUpdate = true;
+    }
+    selectedObject = null;
+    grabbingController = null;
 }
 
 function getIntersections(controller) {
@@ -588,8 +605,15 @@ var animate = function () {
     }
 
     if (selectedObject && grabbingController) {
-        // Move object to controller's position
-        selectedObject.position.setFromMatrixPosition(grabbingController.matrixWorld);
+        // Follow controller without changing the object's parent/scene
+        // world = controllerWorld * selectionOffset
+        const world = tempMatrix2.multiplyMatrices(grabbingController.matrixWorld, selectionOffset);
+        // local = parentInv * world
+        const parentInv = tempMatrix.copy(selectedObject.parent.matrixWorld).invert();
+        const local = world.clone().premultiply(parentInv);
+
+        selectedObject.matrix.copy(local);
+        selectedObject.matrix.decompose(selectedObject.position, selectedObject.quaternion, selectedObject.scale);
     }
 	
 };
