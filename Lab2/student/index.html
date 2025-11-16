@@ -177,6 +177,8 @@ var showEyeFrustrum = 0; // 0 = off, 1 = left eye, 2 = right eye
 var frustumLines = [];
 var currentSurface = 0; // 0 = front, 1 = left, 2 = right, 3 = floor
 var controller1, controller2, controllerGrip1, controllerGrip2;
+var locomotion = [0, 0, 0];
+var dolly, dummyCam;
 let raycaster;
 var group;
 const intersected = [];
@@ -252,6 +254,7 @@ function createRenderer()
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.xr.enabled = true;
+    renderer.setAnimationLoop(animate);
     document.body.appendChild(VRButton.createButton(renderer));
     document.body.appendChild(renderer.domElement);
 }
@@ -282,7 +285,6 @@ function createLights(scn)
     scn.add(dirLight);
 }
 
-
 function createScene()
 {
     scene = new THREE.Scene();
@@ -300,7 +302,6 @@ function createScene()
                 
     createLights(scene);
 }
-
 
 // create a scene with 3D objects representing the display surfaces
 function createDisplaySurfaceScene()
@@ -342,7 +343,6 @@ function createDisplaySurfaceScene()
     createLights(displaySurfaceScene);
 }
 
-
 function getCaveBoundsFromSurfaces() {
     const points = [];
     for (const surf of displaySurfaces) {
@@ -361,7 +361,6 @@ function getCaveBoundsFromSurfaces() {
     }
     return {min, max};
 }
-
 
 function setupCubeParticles(cubeCount, bounds) {
     const { min, max } = bounds;
@@ -395,8 +394,6 @@ function setupCubeParticles(cubeCount, bounds) {
     return { mesh, positions, velocities, scales, colors, min, max };
 }
 
-
- 
 function createDisplaySurfaceTargets()
 {
     const SIZE = 1024;  // texture resolution
@@ -411,6 +408,14 @@ function createCamera()
     camera = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 10000 );
     camera.position.set( 100, 100, 300 );
     camera.lookAt( 0, 0, 0 );
+
+    dolly = new THREE.Object3D();
+    dolly.position.z = 5;
+    dolly.add(camera);
+    scene.add(dolly);
+
+    dummyCam = new THREE.Object3D();
+    camera.add(dummyCam);
 }
 
 function createDisplaySurfaces()
@@ -503,6 +508,58 @@ function setupControllers() {
     raycaster = new THREE.Raycaster();
 }
 
+function onJoystick() {
+    var handedness = "unknown";
+    const session = renderer.xr.getSession();
+
+    if (session) {
+        let xrCamera = renderer.xr.getCamera(camera);
+
+        for (const source of session.inputSources) {
+            if (source && source.handedness) {
+                handedness = source.handedness;
+            }
+            if (!source.gamepad) continue;
+
+            const data = {
+                handedness: handedness,
+                buttons: source.gamepad.buttons.map((b) => b.value),
+                axes: source.gamepad.axes.slice(2)
+            };
+            
+            if (data.handedness == "left") {
+                locomotion[0] = (Math.abs(data.axes[1]) > 0.4) ? data.axes[1] : 0.0;
+                locomotion[2] = (Math.abs(data.axes[0]) > 0.4) ? data.axes[0] : 0.0;
+            }
+            else if (data.handedness == "right") {
+                locomotion[1] = (Math.abs(data.axes[1]) > 0.4) ? data.axes[1] : 0.0;
+            }
+        }
+    }
+}
+
+function characterMove(dt) {
+    const session = renderer.xr.getSession();
+
+    if (session) {
+        const speed = 10;
+        
+        const quaternion = dolly.quaternion.clone();
+        const targetQuaternion = new THREE.Quaternion();
+        dolly.quaternion.copy(dummyCam.getWorldQuaternion(targetQuaternion));
+        
+        // Locomotion X/Z (left joystick) - relative to camera
+        dolly.translateZ(locomotion[0] * dt * speed);
+        dolly.translateX(locomotion[2] * dt * speed);
+        
+        // Restore original rotation before moving y
+        dolly.quaternion.copy(quaternion);
+        
+        // Locomotion Y (right joystick) - absolute
+        dolly.position.y += -locomotion[1] * dt * speed;
+    }
+}
+
 function onSelectStart(event) {
     const controller = event.target;
 
@@ -585,24 +642,33 @@ function cleanIntersected() {
     }
 }
 
-// refresh function
-var animate = function () {
-    cleanIntersected();
+function animate() {
 
+    cleanIntersected();
+    onJoystick();
+    characterMove(clock.getDelta());
+
+    // Intersections of VR controllers
     if (renderer.xr.getSession()) {
         intersectObjects(controller1);
         intersectObjects(controller2);
     }
 
-    var gl = renderer.getContext();
-    renderer.setAnimationLoop(animate);
-
-    // 1. render scene objects
-	renderer.setClearColor(0x808080);
-    renderer.clear();
-    if (showScene)
-        renderer.render(scene, camera);
+    const gl = renderer.getContext();
     
+    // 1. render scene objects
+    if (!renderer.xr.isPresenting) {
+        renderer.setRenderTarget(null);
+        renderer.setClearColor(0x808080);
+        renderer.clear();
+        
+        if (showScene) {
+            renderer.render(scene, camera);
+        }
+    }
+    else if (showScene) {
+        renderer.render(scene, camera);
+    }
     // 2. render scene objects onto a texture, for each target
     for (let [index, displaySurface] of displaySurfaces.entries())
     {
@@ -629,49 +695,53 @@ var animate = function () {
 		
         gl.colorMask(1, 1, 1, 0);
     }
-    // restore state
+
+    // Restore state
     renderer.setRenderTarget(null);
     renderer.setClearColor(0x000000);
-  
+
     // 3. render display surfaces as (textured) quads
     renderer.render(displaySurfaceScene, camera);
-	
-	// 4. render eyes
+
+    // 4. render eyes
     renderer.render(eyeScene, camera);
 
-    // 5. Update frustum lines if enabled
+    // Draw frustrum lines
     if (showEyeFrustrum > 0) {
-        // Remove old lines
-        for (var line of frustumLines) {
+
+        for (let line of frustumLines)
             eyeScene.remove(line);
-        }
         frustumLines = [];
-        
-        // Determine which eye to use: 1 = left, 2 = right
-        var eye = (showEyeFrustrum == 1) ? getLeftEyePosition() : getRightEyePosition();
-        
-        // Show only the selected surface
-        var lines = displaySurfaces[currentSurface].showEyeFrustrum(eye);
+
+        const eyePos =
+            (showEyeFrustrum === 1) ? getLeftEyePosition() : getRightEyePosition();
+
+        const lines = displaySurfaces[currentSurface].showEyeFrustrum(eyePos);
         eyeScene.add(lines);
         frustumLines.push(lines);
+
     } else {
-        // Remove all lines
-        for (var line of frustumLines) {
+        for (let line of frustumLines)
             eyeScene.remove(line);
-        }
         frustumLines = [];
     }
 
+    // Update object if selected
     if (selectedObject && grabbingController) {
-        // Follow controller without changing the object's parent/scene
-        // world = controllerWorld * selectionOffset
-        const world = tempMatrix2.multiplyMatrices(grabbingController.matrixWorld, selectionOffset);
-        // local = parentInv * world
+        const world = tempMatrix2.multiplyMatrices(
+            grabbingController.matrixWorld,
+            selectionOffset
+        );
+
         const parentInv = tempMatrix.copy(selectedObject.parent.matrixWorld).invert();
         const local = world.clone().premultiply(parentInv);
 
         selectedObject.matrix.copy(local);
-        selectedObject.matrix.decompose(selectedObject.position, selectedObject.quaternion, selectedObject.scale);
+        selectedObject.matrix.decompose(
+            selectedObject.position,
+            selectedObject.quaternion,
+            selectedObject.scale
+        );
     }
 
     const dummy = new THREE.Object3D();
@@ -692,11 +762,8 @@ var animate = function () {
         particleCubes.setMatrixAt(i, dummy.matrix);
     }
     particleCubes.instanceMatrix.needsUpdate = true;
+}
 
-
-
-	
-};
 
 
 window.addEventListener( 'keydown', function ( event ) 
@@ -758,7 +825,7 @@ window.addEventListener( 'keydown', function ( event )
             break;
         
         case 'ArrowLeft':
-            console.log("LEFT");
+            characterMove();
             break;
 
         case 'ArrowUp':
