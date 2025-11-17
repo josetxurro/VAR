@@ -11,8 +11,6 @@
 	"L" See from Left Eye | "R" See from Right Eye | "S" toggle show scene | "F" toggle show frustrum of each eye | "G" toggle between surfaces (Front/Left/Right/Floor)   <br />
 </div>
 
-<!-- Check: https://threejs.org/docs/index.html#manual/en/introduction/Installation 
-for alternative installations -->
 <script type="importmap">
     {
         "imports": {
@@ -30,6 +28,8 @@ for alternative installations -->
     import { TeapotGeometry } from 'three/addons/geometries/TeapotGeometry.js';
     import { XRButton } from 'three/addons/webxr/XRButton.js';
     import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+    import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+    import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 
     const clock = new THREE.Clock();
 
@@ -182,10 +182,13 @@ var locomotion = [0, 0, 0];
 var dolly, dummyCam;
 let raycaster;
 var group;
+var uiGroup;
 var vrMode = false;
 var leftEye, rightEye;
 const intersected = [];
 const prevGamePads = new Map();
+var tunnelCylinders = [];
+var tunnelTime = 0;
 // Define button behaviors as a map
 const buttonActions = {
     left: {
@@ -208,6 +211,11 @@ const buttonActions = {
     }
 };
 
+/**
+ * Add drag controls to interactive objects in the scene
+ * Enables dragging of the teapot and head objects with the mouse
+ * Disables orbit controls during drag operations and highlights objects
+ */
 function addDragControlToObjects()
 {
     var objects = [];
@@ -235,6 +243,11 @@ function addDragControlToObjects()
     } );
 }
 
+/**
+ * Create a scene representing the user's head and eyes
+ * Creates sphere meshes for the head and two eyes with proper IPD (Inter-Pupillary Distance)
+ * The head is centered at eyeCenter and eyes are positioned relative to it
+ */
 function createEyeScene()
 {
     var IPD = 6.8; 
@@ -271,6 +284,11 @@ function createEyeScene()
     createLights(eyeScene);
 }
 
+/**
+ * Create and configure the WebGL renderer
+ * Sets up the renderer with antialiasing, shadows, and XR support
+ * Creates the XR button for VR mode and adds the renderer to the DOM
+ */
 function createRenderer()
 {
     renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true});    
@@ -286,6 +304,11 @@ function createRenderer()
     document.body.appendChild(renderer.domElement);
 }
 
+/**
+ * Enable orbit controls for camera navigation
+ * @param {THREE.Camera} cam - The camera to control
+ * @param {THREE.WebGLRenderer} renderer - The renderer providing the DOM element
+ */
 function enableOrbitCamera(cam, renderer)
 {
     orbitControl = new OrbitControls(cam, renderer.domElement );
@@ -293,6 +316,11 @@ function enableOrbitCamera(cam, renderer)
     orbitControl.maxDistance = 50000;
 }
 
+/**
+ * Create and add lights to a scene
+ * @param {THREE.Scene} scn - The scene to add lights to
+ * Adds ambient light and a directional light with shadows
+ */
 function createLights(scn)
 {
     var ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
@@ -312,10 +340,15 @@ function createLights(scn)
     scn.add(dirLight);
 }
 
+/**
+ * Create the main scene with objects to display
+ * Initializes the scene, group, teapot mesh, tunnel cylinders and lights
+ */
 function createScene()
 {
     scene = new THREE.Scene();
     group = new THREE.Group();
+    uiGroup = new THREE.Group(); // UI elements won't be projected
 
     var geometry = new TeapotGeometry( 40, 15);
     var material = new THREE.MeshPhongMaterial( { color: 0xffffff } );
@@ -324,13 +357,167 @@ function createScene()
     teapot.position.z-=70;
 
     group.add( teapot );
+    
+    // Create circular path with cylinders
+    createTunnelCylinders();
+    
+    // Create XR controls text panel
+    createControlsTextPanel();
+    
     scene.add( group );
-    //scene.add(particleCubes);
-                
+    // Don't add uiGroup to scene - it will be rendered separately
     createLights(scene);
 }
 
-// create a scene with 3D objects representing the display surfaces
+/**
+ * Create a 3D text panel displaying XR controls information
+ * Creates a canvas texture with control instructions visible in VR
+ */
+function createControlsTextPanel() {
+    // Create canvas for text
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.width = 1024;
+    canvas.height = 512;
+    
+    // Background
+    context.fillStyle = '#1a1a1a';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Border
+    context.strokeStyle = '#00ff00';
+    context.lineWidth = 8;
+    context.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+    
+    // Title
+    context.fillStyle = '#00ff00';
+    context.font = 'bold 48px Arial';
+    context.textAlign = 'center';
+    context.fillText('XR CONTROLS', canvas.width / 2, 70);
+    
+    // Controls text
+    context.fillStyle = '#ffffff';
+    context.font = '32px Arial';
+    context.textAlign = 'left';
+    
+    const controls = [
+        'LEFT CONTROLLER:',
+        '  Joystick: Move Forward/Back & Strafe',
+        '  Button X: Toggle VR Mode',
+        '  Button Y: Toggle Scene Visibility',
+        '',
+        'RIGHT CONTROLLER:',
+        '  Joystick: Move Up/Down',
+        '  Button A: Cycle Eye Frustum View',
+        '  Button B: Change Display Surface'
+    ];
+    
+    let yPos = 140;
+    controls.forEach(line => {
+        if (line.startsWith('LEFT') || line.startsWith('RIGHT')) {
+            context.fillStyle = '#00ffff';
+            context.font = 'bold 32px Arial';
+        } else {
+            context.fillStyle = '#ffffff';
+            context.font = '28px Arial';
+        }
+        context.fillText(line, 60, yPos);
+        yPos += 42;
+    });
+    
+    // Create texture from canvas
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    
+    // Create plane mesh
+    const planeGeometry = new THREE.PlaneGeometry(100, 50);
+    const planeMaterial = new THREE.MeshBasicMaterial({ 
+        map: texture,
+        side: THREE.DoubleSide,
+        transparent: true
+    });
+    
+    const textPanel = new THREE.Mesh(planeGeometry, planeMaterial);
+    textPanel.position.set(0, 80, -100);
+    textPanel.name = "ControlsPanel";
+    
+    uiGroup.add(textPanel); // Add to UI group instead of main group
+}
+
+/**
+ * Create a collection of cylinders arranged in a circular path
+ * Creates 20 cylinders with rainbow colors distributed evenly around a circle
+ * Each cylinder stores its initial angle and index for animation purposes
+ */
+function createTunnelCylinders() {
+    const cylinderCount = 20;
+    const cylinderLength = 15; // Short cylinders
+    const cylinderRadius = 8;
+    const pathRadius = 80; // Radius of the circular path
+    
+    for (let i = 0; i < cylinderCount; i++) {
+        // Create cylinder
+        const geometry = new THREE.CylinderGeometry(cylinderRadius, cylinderRadius, cylinderLength, 32);
+        
+        // Rainbow gradient color
+        const hue = i / cylinderCount;
+        const material = new THREE.MeshPhongMaterial({ 
+            color: new THREE.Color().setHSL(hue, 0.8, 0.5),
+            side: THREE.DoubleSide
+        });
+        
+        const cylinder = new THREE.Mesh(geometry, material);
+        
+        // Save initial angle for circular path
+        cylinder.userData.angle = (i / cylinderCount) * Math.PI * 2;
+        cylinder.userData.index = i;
+        
+        tunnelCylinders.push(cylinder);
+        group.add(cylinder);
+    }
+}
+
+/**
+ * Update the position and orientation of cylinders on their circular path
+ * @param {number} dt - Delta time in seconds since last frame
+ * 
+ * Animates cylinders moving in a circle with expanding/contracting radius
+ * The path radius oscillates between 50 and 200 units
+ * Cylinders rotate around the circle and are oriented tangent to the path
+ */
+function updateTunnelCylinders(dt) {
+    tunnelTime += dt;
+    
+    // Radius contracts and expands
+    const minRadius = 100;
+    const maxRadius = 200;
+    const pathRadius = minRadius + (maxRadius - minRadius) * (Math.sin(tunnelTime * 0.5) * 0.5 + 0.5);
+    
+    const speed = 0.5; // Rotation speed on the circle
+    
+    for (let cylinder of tunnelCylinders) {
+        // Update angle for circular motion
+        cylinder.userData.angle += speed * dt;
+        
+        // Position on circular path (XZ plane)
+        const angle = cylinder.userData.angle;
+        cylinder.position.x = Math.cos(angle) * pathRadius;
+        cylinder.position.z = Math.sin(angle) * pathRadius;
+        cylinder.position.y = 0;
+        
+        // Orient cylinder tangent to the circle (pointing in movement direction)
+        cylinder.rotation.y = angle + Math.PI / 2;
+        
+        // Small tilt for visual effect
+        cylinder.rotation.z = Math.sin(tunnelTime + cylinder.userData.index) * 0.1;
+    }
+}
+
+/**
+ * Create a scene with 3D objects representing the display surfaces
+ * Creates textured planes for each CAVE display surface (Front, Left, Right, Floor)
+ * Each surface is positioned and oriented according to its DisplaySurface definition
+ */
 function createDisplaySurfaceScene()
 {
     displaySurfaceScene = new THREE.Scene();
@@ -370,6 +557,10 @@ function createDisplaySurfaceScene()
     createLights(displaySurfaceScene);
 }
 
+/**
+ * Calculate the bounding box of the CAVE from display surfaces
+ * @returns {Object} Object containing min and max vectors defining the CAVE bounds
+ */
 function getCaveBoundsFromSurfaces() {
     const points = [];
     for (const surf of displaySurfaces) {
@@ -389,6 +580,14 @@ function getCaveBoundsFromSurfaces() {
     return {min, max};
 }
 
+/**
+ * Setup cube particles within the CAVE bounds
+ * @param {number} cubeCount - Number of particle cubes to create
+ * @param {Object} bounds - Object with min and max vectors defining the bounds
+ * @returns {Object} Object containing mesh, positions, velocities, scales, colors, and bounds
+ * 
+ * Creates an instanced mesh of cubes with random positions, velocities, scales and colors
+ */
 function setupCubeParticles(cubeCount, bounds) {
     const { min, max } = bounds;
     const geometry = new THREE.BoxGeometry(6, 6, 6);
@@ -421,6 +620,10 @@ function setupCubeParticles(cubeCount, bounds) {
     return { mesh, positions, velocities, scales, colors, min, max };
 }
 
+/**
+ * Create render targets for each display surface
+ * Creates 1024x1024 WebGL render targets that will store the rendered view for each surface
+ */
 function createDisplaySurfaceTargets()
 {
     const SIZE = 1024;  // texture resolution
@@ -430,6 +633,11 @@ function createDisplaySurfaceTargets()
         displaySurfaceTargets.push(new THREE.WebGLRenderTarget(SIZE, SIZE));
 }
 
+/**
+ * Create the main camera and dolly object for VR locomotion
+ * Sets up a perspective camera attached to a dolly object for movement in VR
+ * Also creates a dummy camera for orientation tracking
+ */
 function createCamera()
 {
     camera = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 10000 );
@@ -445,6 +653,10 @@ function createCamera()
     camera.add(dummyCam);
 }
 
+/**
+ * Create the CAVE display surfaces
+ * Defines the four display surfaces (Front, Left, Right, Floor) with their positions and orientations
+ */
 function createDisplaySurfaces()
 {
     displaySurfaces = [];
@@ -482,18 +694,32 @@ function createDisplaySurfaces()
 	
 }
 
+/**
+ * Get the world position of the left eye
+ * @returns {THREE.Vector3} World position of the left eye
+ */
 function getLeftEyePosition()
 {
     var eye = eyeScene.getObjectByName("EyeL");
     return eye.getWorldPosition(new THREE.Vector3());
 }
 
+/**
+ * Get the world position of the right eye
+ * @returns {THREE.Vector3} World position of the right eye
+ */
 function getRightEyePosition()
 {
     var eye = eyeScene.getObjectByName("EyeR");
     return eye.getWorldPosition(new THREE.Vector3());
 }
 
+/**
+ * Create a camera from view and projection matrices
+ * @param {THREE.Matrix4} view - The view matrix
+ * @param {THREE.Matrix4} proj - The projection matrix
+ * @returns {THREE.Camera} A camera configured with the given matrices
+ */
 function cameraFromViewProj(view, proj)
 {
 	var cam = camera.clone();
@@ -505,6 +731,11 @@ function cameraFromViewProj(view, proj)
 	return cam;
 }
 
+/**
+ * Setup VR controllers
+ * Initializes two XR controllers with models, adds them to the dolly
+ * Sets up raycaster for interaction and event listeners
+ */
 function setupControllers() {
     const controllerModelFactory = new XRControllerModelFactory();
 
@@ -537,7 +768,11 @@ function setupControllers() {
     raycaster = new THREE.Raycaster();
 }
 
-// Controllers interaction
+/**
+ * Handle controller select start event
+ * @param {Event} event - The select start event from the controller
+ * Called when the controller trigger is pressed, attaches selected object to controller
+ */
 function onSelectStart(event) {
     const controller = event.target;
 
@@ -564,6 +799,11 @@ function onSelectStart(event) {
     controller.userData.targetRayMode = event.data.targetRayMode;
 }
 
+/**
+ * Handle controller select end event
+ * @param {Event} event - The select end event from the controller
+ * Called when the controller trigger is released, detaches selected object from controller
+ */
 function onSelectEnd(event) {
     const controller = event.target;
 
@@ -584,6 +824,11 @@ function onSelectEnd(event) {
     grabbingController = null;
 }
 
+/**
+ * Get intersections between controller ray and scene objects
+ * @param {THREE.XRController} controller - The XR controller to check intersections for
+ * @returns {Array} Array of intersection objects
+ */
 function getIntersections(controller) {
     controller.updateMatrixWorld();
 
@@ -592,6 +837,11 @@ function getIntersections(controller) {
     return raycaster.intersectObjects(group.children, false);
 }
 
+/**
+ * Check and visualize intersections between controller and objects
+ * @param {THREE.XRController} controller - The XR controller to check
+ * Updates the controller's line length and highlights intersected objects
+ */
 function intersectObjects(controller) {
     if (controller.userData.targetRayMode === 'screen') return;
 
@@ -613,6 +863,10 @@ function intersectObjects(controller) {
     }
 }
 
+/**
+ * Clean up highlighted intersected objects
+ * Removes the red emissive highlight from all previously intersected objects
+ */
 function cleanIntersected() {
     while ( intersected.length ) {
         const object = intersected.pop();
@@ -620,6 +874,12 @@ function cleanIntersected() {
     }
 }
 
+/**
+ * Handle button press events from VR controllers
+ * @param {string} hand - The handedness of the controller ("left" or "right")
+ * @param {number} buttonIndex - The index of the pressed button
+ * Executes the corresponding action defined in buttonActions map
+ */
 function onButtonPressed(hand, buttonIndex) {
     // Button 4: A/X button
     // Button 5: B/Y button
@@ -628,7 +888,11 @@ function onButtonPressed(hand, buttonIndex) {
     if (action) action();
 }
 
-// Joystick movement
+/**
+ * Poll gamepad controllers and update locomotion values
+ * Reads joystick axes for movement and detects button presses
+ * Updates the global locomotion array with movement values for X, Y, and Z axes
+ */
 function onGamePadController() {
     var handedness = "unknown";
     const session = renderer.xr.getSession();
@@ -675,6 +939,11 @@ function onGamePadController() {
     }
 }
 
+/**
+ * Move the character/dolly based on locomotion input
+ * @param {number} dt - Delta time in seconds since last frame
+ * Applies movement relative to camera orientation for X/Z and absolute for Y
+ */
 function characterMove(dt) {
     const session = renderer.xr.getSession();
 
@@ -697,6 +966,11 @@ function characterMove(dt) {
     }
 }
 
+/**
+ * Update particle cube positions and wrap them within CAVE bounds
+ * Updates each particle's position based on velocity and wraps around boundaries
+ * Updates the instance matrices for rendering
+ */
 function updateParticles() {
     const dummy = new THREE.Object3D();
     for (let i = 0; i < PARTICLE_COUNT; i++) {
@@ -718,10 +992,19 @@ function updateParticles() {
     particleCubes.instanceMatrix.needsUpdate = true;
 }
 
+/**
+ * Main animation loop
+ * Handles rendering of the scene to display surfaces and the main viewport
+ * Updates animations, controller input, and manages VR/non-VR rendering paths
+ */
 function animate() {
 
     const gl = renderer.getContext();
     const isVR = renderer.xr.isPresenting;
+    const dt = clock.getDelta();
+
+    // Update tunnel animation
+    updateTunnelCylinders(dt);
 
     // 1. render scene objects
     renderer.setRenderTarget(null);
@@ -752,7 +1035,7 @@ function animate() {
 
         // Joystick movement
         onGamePadController();
-        characterMove(clock.getDelta());
+        characterMove(dt);
         
         // Controllers interaction
         intersectObjects(controller1);
@@ -819,6 +1102,11 @@ function animate() {
     // 4. render eyes
     renderer.render(eyeScene, camera);
 
+    // 5. render UI elements
+    if (renderer.xr.isPresenting) {
+        renderer.render(uiGroup, camera);
+    }
+
     // Draw frustrum lines
     if (showEyeFrustrum > 0) {
 
@@ -855,8 +1143,6 @@ function animate() {
             selectedObject.scale
         );
     }
-
-    updateParticles();
 }
 
 window.addEventListener( 'keydown', function ( event ) 
@@ -927,9 +1213,6 @@ window.addEventListener( 'keydown', function ( event )
 
 createRenderer();  			// create WebGL renderer
 createDisplaySurfaces();	// Display surfaces
-const PARTICLE_COUNT = 120;
-const bounds = getCaveBoundsFromSurfaces();
-const { mesh: particleCubes, positions, velocities, scales, min, max } = setupCubeParticles(PARTICLE_COUNT, bounds);
 createDisplaySurfaceTargets(); // Textures for the display surfaces
 createDisplaySurfaceScene();	// 3D objects for the display surfaces
 createEyeScene();	// spheres representing head + eyes
