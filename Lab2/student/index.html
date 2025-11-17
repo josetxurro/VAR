@@ -28,9 +28,8 @@ for alternative installations -->
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { DragControls } from 'three/addons/controls/DragControls.js';
     import { TeapotGeometry } from 'three/addons/geometries/TeapotGeometry.js';
-    import { VRButton } from 'three/addons/webxr/VRButton.js';
+    import { XRButton } from 'three/addons/webxr/XRButton.js';
     import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
     const clock = new THREE.Clock();
 
@@ -166,6 +165,7 @@ class DisplaySurface
 
 var renderer, scene, camera;
 var displaySurfaces, displaySurfaceScene, displaySurfaceTargets;
+var renderTargetSaved, xrEnabledSaved;
 var eyeCenter, eyeScene; 
 var orbitControl;
 var showScene = true;
@@ -182,7 +182,31 @@ var locomotion = [0, 0, 0];
 var dolly, dummyCam;
 let raycaster;
 var group;
+var vrMode = false;
+var leftEye, rightEye;
 const intersected = [];
+const prevGamePads = new Map();
+// Define button behaviors as a map
+const buttonActions = {
+    left: {
+        4: () => { 
+            vrMode = !vrMode;
+        },
+        5: () => { 
+            showScene = !showScene;
+        }
+    },
+    right: {
+        4: () => {
+            showEyeFrustrum = (showEyeFrustrum + 1) % 3;
+        },
+        5: () => {
+            if (showEyeFrustrum > 0) {
+                currentSurface = (currentSurface + 1) % displaySurfaces.length;
+            }
+        }
+    }
+};
 
 function addDragControlToObjects()
 {
@@ -255,8 +279,10 @@ function createRenderer()
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.xr.enabled = true;
+    
     renderer.setAnimationLoop(animate);
-    document.body.appendChild(VRButton.createButton(renderer));
+    
+    document.body.appendChild(XRButton.createButton(renderer));
     document.body.appendChild(renderer.domElement);
 }
 
@@ -297,11 +323,9 @@ function createScene()
     teapot.name = "Teapot";
     teapot.position.z-=70;
 
-
-
     group.add( teapot );
     scene.add( group );
-    scene.add(particleCubes);
+    //scene.add(particleCubes);
                 
     createLights(scene);
 }
@@ -481,41 +505,22 @@ function cameraFromViewProj(view, proj)
 	return cam;
 }
 
-function addPipeThroughWall() {
-    const geometry = new THREE.CylinderGeometry(6, 6, 400, 32);
-    const material = new THREE.MeshPhongMaterial({
-        color: 0x8888ff,
-        shininess: 100,
-        specular: 0xffffff
-    });
-    const pipe = new THREE.Mesh(geometry, material);
-    pipe.name = "Pipe";
-
-    pipe.rotation.z = Math.PI / 4;
-    pipe.rotation.x = Math.PI / 4;          
-          
-    pipe.position.set(-20, -80, -100);          
-
-    group.add(pipe);    
-}
-
-
 function setupControllers() {
     const controllerModelFactory = new XRControllerModelFactory();
 
     // Controller 1
     controller1 = renderer.xr.getController(0);
-    displaySurfaceScene.add(controller1);
+    dolly.add(controller1);  // Cambiar de displaySurfaceScene a dolly
     controllerGrip1 = renderer.xr.getControllerGrip(0);
     controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
-    displaySurfaceScene.add(controllerGrip1);
+    dolly.add(controllerGrip1);  // Cambiar de displaySurfaceScene a dolly
 
     // Controller 2
     controller2 = renderer.xr.getController(1);
-    displaySurfaceScene.add(controller2);
+    dolly.add(controller2);  // Cambiar de displaySurfaceScene a dolly
     controllerGrip2 = renderer.xr.getControllerGrip(1);
     controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
-    displaySurfaceScene.add(controllerGrip2);
+    dolly.add(controllerGrip2);  // Cambiar de displaySurfaceScene a dolly
 
     controller1.addEventListener('selectstart', onSelectStart);
     controller2.addEventListener('selectstart', onSelectStart);
@@ -615,6 +620,14 @@ function cleanIntersected() {
     }
 }
 
+function onButtonPressed(hand, buttonIndex) {
+    // Button 4: A/X button
+    // Button 5: B/Y button
+    const action = buttonActions[hand]?.[buttonIndex];
+    
+    if (action) action();
+}
+
 // Joystick movement
 function onGamePadController() {
     var handedness = "unknown";
@@ -629,6 +642,7 @@ function onGamePadController() {
             }
             if (!source.gamepad) continue;
 
+            const old = prevGamePads.get(source);
             const data = {
                 handedness: handedness,
                 buttons: source.gamepad.buttons.map((b) => b.value),
@@ -643,7 +657,20 @@ function onGamePadController() {
                 locomotion[1] = (Math.abs(data.axes[1]) > 0.4) ? data.axes[1] : 0.0;
             }
 
-            // console.log(data.buttons);
+            // Handle buttons (only if we have previous state)
+            if (old) {
+                data.buttons.forEach((value, i) => {
+                    // Button pressed (value changed from not pressed to pressed)
+                    if (value !== old.buttons[i]) {
+                        if (value === 1) { // Fully pressed
+                            onButtonPressed(data.handedness, i);
+                        }
+                    }
+                });
+            }
+            
+            // Store current state for next frame
+            prevGamePads.set(source, data);
         }
     }
 }
@@ -694,10 +721,34 @@ function updateParticles() {
 function animate() {
 
     const gl = renderer.getContext();
+    const isVR = renderer.xr.isPresenting;
 
     // 1. render scene objects
-    if (renderer.xr.getSession()) {
+    renderer.setRenderTarget(null);
+	renderer.setClearColor(0x808080);
+    renderer.clear();
+
+    // 1. render scene objects
+    if (isVR) {
         cleanIntersected();
+
+        if (vrMode) {
+            const xrFrame = renderer.xr.getFrame();
+            const refSpace = renderer.xr.getReferenceSpace();
+            const viewerPose = xrFrame.getViewerPose(refSpace);
+            const pL = viewerPose.views[0].transform.position;
+            const pR = viewerPose.views[1].transform.position;
+
+            const localLeftEye  = new THREE.Vector3(pL.x, pL.y, pL.z);
+            const localRightEye = new THREE.Vector3(pR.x, pR.y, pR.z);
+
+            dolly.updateMatrixWorld(true);
+            leftEye  = localLeftEye.applyMatrix4(dolly.matrixWorld);
+            rightEye = localRightEye.applyMatrix4(dolly.matrixWorld);
+        } else {
+            leftEye  = getLeftEyePosition();
+            rightEye = getRightEyePosition();
+        }
 
         // Joystick movement
         onGamePadController();
@@ -708,6 +759,8 @@ function animate() {
         intersectObjects(controller2);
 
         if (showScene) renderer.render(scene, camera);
+        renderTargetSaved = renderer.getRenderTarget();
+        xrEnabledSaved = renderer.xr.enabled
 
         renderer.xr.enabled = false;
     }
@@ -715,6 +768,9 @@ function animate() {
         renderer.setRenderTarget(null);
         renderer.setClearColor(0x808080);
         renderer.clear();
+
+        leftEye  = getLeftEyePosition();
+        rightEye = getRightEyePosition();
         
         if (showScene) renderer.render(scene, camera);
     }
@@ -728,7 +784,7 @@ function animate() {
 
 		// left eye on RED channel
         gl.colorMask(1, 0, 0, 0); 
-		var eye = getLeftEyePosition();
+		var eye = leftEye;
 		var view = displaySurface.viewMatrix(eye);
 		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
         var leftCamera = cameraFromViewProj(view, proj);
@@ -736,22 +792,26 @@ function animate() {
     
 		// right eye on GREEN, BLUE channels
 		gl.colorMask(0, 1, 1, 0);
-		var eye = getRightEyePosition();
+		var eye = rightEye;
 		var view = displaySurface.viewMatrix(eye);
 		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
         var rightCamera = cameraFromViewProj(view, proj);
         renderer.clearDepth();
         renderer.render(scene, rightCamera); 
 		
-        gl.colorMask(1, 1, 1, 0);
+        gl.colorMask(1, 1, 1, 1);
     }
+    
 
-    if (renderer.xr.isPresenting)
-        renderer.xr.enabled = true;
-
-    // Restore state
-    renderer.setRenderTarget(null);
-    renderer.setClearColor(0x000000);
+    if (renderer.xr.isPresenting) {
+        renderer.setRenderTarget(renderTargetSaved);
+        renderer.xr.enabled = xrEnabledSaved;
+    }
+    else {
+        // Restore state
+        renderer.setRenderTarget(null);
+        renderer.setClearColor(0x000000);
+    }
 
     // 3. render display surfaces as (textured) quads
     renderer.render(displaySurfaceScene, camera);
@@ -798,8 +858,6 @@ function animate() {
 
     updateParticles();
 }
-
-
 
 window.addEventListener( 'keydown', function ( event ) 
 {
@@ -876,9 +934,8 @@ createDisplaySurfaceTargets(); // Textures for the display surfaces
 createDisplaySurfaceScene();	// 3D objects for the display surfaces
 createEyeScene();	// spheres representing head + eyes
 createScene();		// some objects to test (teapot...)
-addPipeThroughWall();      
-setupControllers();
-createCamera();		// a third-person camera
+createCamera();		// a third-person camera - CREA EL DOLLY
+setupControllers(); // ahora sí puede añadir controladores al dolly
 enableOrbitCamera(camera, renderer);  // basic camera control
 addDragControlToObjects();	// allow some objects to be dragged
 animate();
