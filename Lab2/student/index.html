@@ -1,3 +1,14 @@
+<!--
+Lab Session 2 - Stereoscopy project
+Virtual and Augmented Reality
+Universitat Politècnica de Catalunya
+
+17/11/2025
+
+Jose Luis Pascual Sánchez
+José Pedro Soares de Oliveira
+-->
+
 <!DOCTYPE html>
 <html>
 <head>
@@ -162,34 +173,61 @@ class DisplaySurface
     
 }
 
+// ============================================================================
+// GLOBAL VARIABLES
+// ============================================================================
 
-var renderer, scene, camera;
-var displaySurfaces, displaySurfaceScene, displaySurfaceTargets;
-var renderTargetSaved, xrEnabledSaved;
-var eyeCenter, eyeScene; 
-var orbitControl;
-var showScene = true;
-var tempMatrix = new THREE.Matrix4();
-var tempMatrix2 = new THREE.Matrix4();
-var selectionOffset = new THREE.Matrix4();
-var selectedObject = null;
-var grabbingController = null;
-var showEyeFrustrum = 0; // 0 = off, 1 = left eye, 2 = right eye
-var frustumLines = [];
-var currentSurface = 0; // 0 = front, 1 = left, 2 = right, 3 = floor
-var controller1, controller2, controllerGrip1, controllerGrip2;
-var locomotion = [0, 0, 0];
-var dolly, dummyCam;
-let raycaster;
-var group;
-var uiGroup;
-var vrMode = false;
-var leftEye, rightEye;
-const intersected = [];
-const prevGamePads = new Map();
-var tunnelCylinders = [];
-var tunnelTime = 0;
-// Define button behaviors as a map
+// Rendering
+var renderer;                       // Main WebGL renderer
+var scene;                          // Main scene containing 3D objects
+var camera;                         // Main perspective camera
+var orbitControl;                   // Orbit controls for camera navigation
+var renderTargetSaved;              // Saved render target state
+var xrEnabledSaved;                 // Saved XR enabled state
+
+// Display Surfaces (CAVE walls)
+var displaySurfaces;                // Array of CAVE display surfaces (Front/Left/Right/Floor)
+var displaySurfaceScene;            // Scene with 3D representations of display surfaces
+var displaySurfaceTargets;          // Render targets for each display surface texture
+var currentSurface = 0;             // Currently selected surface index (0=front, 1=left, 2=right, 3=floor)
+
+// Eye/Head Tracking
+var eyeCenter;                      // Center position of user's head
+var eyeScene;                       // Scene containing head and eye representations
+var leftEye;                        // World position of left eye
+var rightEye;                       // World position of right eye
+
+// VR/XR
+var dolly;                          // Dolly object for VR locomotion (contains camera)
+var dummyCam;                       // Dummy camera for orientation tracking
+var controller1, controller2;       // Left and right hand VR controllers
+var controllerGrip1, controllerGrip2; // Controller grips for model attachment
+let raycaster;                      // Raycaster for VR controller intersections
+var locomotion = [0, 0, 0];         // Locomotion input [forward/back, up/down, left/right]
+const prevGamePads = new Map();     // Previous gamepad states for button detection
+var vrMode = false;                 // Toggle between VR headset tracking and manual head
+
+// Object Interaction
+var group;                          // Group containing main scene objects (teapot, cylinders)
+var uiGroup;                        // Group containing UI elements (rendered separately in VR)
+var selectedObject = null;          // Currently selected/grabbed object
+var grabbingController = null;      // Controller currently grabbing an object
+var selectionOffset = new THREE.Matrix4(); // Offset matrix between controller and grabbed object
+const intersected = [];             // Array of objects currently intersected by controllers
+
+// Temporary Computation
+var tempMatrix = new THREE.Matrix4();  // Temporary matrix for calculations
+var tempMatrix2 = new THREE.Matrix4(); // Temporary matrix for calculations
+
+// Visualization/Debug
+var showScene = true;               // Toggle visibility of main scene
+var showEyeFrustrum = 0;            // Eye frustum visualization (0=off, 1=left, 2=right)
+var frustumLines = [];              // Array of frustum visualization line objects
+
+// Animation
+var tunnelCylinders = [];           // Array of cylinder meshes forming tunnel animation
+var tunnelTime = 0;                 // Accumulated time for tunnel animation
+
 const buttonActions = {
     left: {
         4: () => { 
@@ -489,7 +527,7 @@ function updateTunnelCylinders(dt) {
     tunnelTime += dt;
     
     // Radius contracts and expands
-    const minRadius = 100;
+    const minRadius = 50;
     const maxRadius = 200;
     const pathRadius = minRadius + (maxRadius - minRadius) * (Math.sin(tunnelTime * 0.5) * 0.5 + 0.5);
     
@@ -555,69 +593,6 @@ function createDisplaySurfaceScene()
     }
     
     createLights(displaySurfaceScene);
-}
-
-/**
- * Calculate the bounding box of the CAVE from display surfaces
- * @returns {Object} Object containing min and max vectors defining the CAVE bounds
- */
-function getCaveBoundsFromSurfaces() {
-    const points = [];
-    for (const surf of displaySurfaces) {
-        points.push(
-            surf.origin.clone(),
-            surf.origin.clone().add(surf.u),
-            surf.origin.clone().add(surf.v),
-            surf.origin.clone().add(surf.u).add(surf.v)
-        );
-    }
-    let min = points[0].clone();
-    let max = points[0].clone();
-    for (const v of points) {
-        min.min(v);
-        max.max(v);
-    }
-    return {min, max};
-}
-
-/**
- * Setup cube particles within the CAVE bounds
- * @param {number} cubeCount - Number of particle cubes to create
- * @param {Object} bounds - Object with min and max vectors defining the bounds
- * @returns {Object} Object containing mesh, positions, velocities, scales, colors, and bounds
- * 
- * Creates an instanced mesh of cubes with random positions, velocities, scales and colors
- */
-function setupCubeParticles(cubeCount, bounds) {
-    const { min, max } = bounds;
-    const geometry = new THREE.BoxGeometry(6, 6, 6);
-    const material = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: 0.8,
-        metalness: 0.2
-    });
-    const mesh = new THREE.InstancedMesh(geometry, material, cubeCount);
-
-    const positions = new Float32Array(cubeCount * 3);
-    const velocities = new Float32Array(cubeCount * 3);
-    const scales = new Float32Array(cubeCount);
-    const colors = [];
-
-    for (let i = 0; i < cubeCount; i++) {
-        positions[i * 3]     = Math.random() * (max.x - min.x) + min.x;
-        positions[i * 3 + 1] = Math.random() * (max.y - min.y) + min.y;
-        positions[i * 3 + 2] = Math.random() * (max.z - min.z) + min.z;
-        velocities[i * 3]     = (Math.random() - 0.5) * 0.2;
-        velocities[i * 3 + 1] = (Math.random() - 0.5) * 0.2;
-        velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.2;
-
-        scales[i] = Math.random() * 1.6 + 0.4; // (0.4–2) size
-        colors[i] = new THREE.Color(Math.random(), Math.random(), Math.random());
-        mesh.setColorAt(i, colors[i]);
-    }
-    mesh.instanceColor.needsUpdate = true;
-
-    return { mesh, positions, velocities, scales, colors, min, max };
 }
 
 /**
@@ -967,166 +942,182 @@ function characterMove(dt) {
 }
 
 /**
- * Update particle cube positions and wrap them within CAVE bounds
- * Updates each particle's position based on velocity and wraps around boundaries
- * Updates the instance matrices for rendering
+ * Update eye positions based on VR or non-VR mode
+ * 
+ * In VR mode with vrMode enabled, retrieves actual eye positions from the XR device
+ * and transforms them to world space using the dolly matrix.
+ * Otherwise, calculates eye positions based on head model.
+ * 
+ * Updates global variables: leftEye, rightEye
  */
-function updateParticles() {
-    const dummy = new THREE.Object3D();
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-        positions[i * 3]     += velocities[i * 3];
-        positions[i * 3 + 1] += velocities[i * 3 + 1];
-        positions[i * 3 + 2] += velocities[i * 3 + 2];
-        if (positions[i * 3] > max.x) positions[i * 3] = min.x;
-        if (positions[i * 3] < min.x) positions[i * 3] = max.x;
-        if (positions[i * 3 + 1] > max.y) positions[i * 3 + 1] = min.y;
-        if (positions[i * 3 + 1] < min.y) positions[i * 3 + 1] = max.y;
-        if (positions[i * 3 + 2] > max.z) positions[i * 3 + 2] = min.z;
-        if (positions[i * 3 + 2] < min.z) positions[i * 3 + 2] = max.z;
+function updateEyePositions() {
+    const isVR = renderer.xr.isPresenting;
+    
+    if (isVR && vrMode) {
+        const xrFrame = renderer.xr.getFrame();
+        const refSpace = renderer.xr.getReferenceSpace();
+        const viewerPose = xrFrame.getViewerPose(refSpace);
+        const pL = viewerPose.views[0].transform.position;
+        const pR = viewerPose.views[1].transform.position;
 
-        dummy.position.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
-        dummy.scale.set(scales[i], scales[i], scales[i]);
-        dummy.updateMatrix();
-        particleCubes.setMatrixAt(i, dummy.matrix);
+        const localLeftEye  = new THREE.Vector3(pL.x, pL.y, pL.z);
+        const localRightEye = new THREE.Vector3(pR.x, pR.y, pR.z);
+
+        dolly.updateMatrixWorld(true);
+        leftEye  = localLeftEye.applyMatrix4(dolly.matrixWorld);
+        rightEye = localRightEye.applyMatrix4(dolly.matrixWorld);
+    } else {
+        leftEye  = getLeftEyePosition();
+        rightEye = getRightEyePosition();
     }
-    particleCubes.instanceMatrix.needsUpdate = true;
 }
 
 /**
- * Main animation loop
- * Handles rendering of the scene to display surfaces and the main viewport
- * Updates animations, controller input, and manages VR/non-VR rendering paths
+ * Handle VR controller interactions and movement
+ * 
+ * Processes gamepad input for movement and handles controller-object intersections
+ * for grabbing and manipulating objects in VR.
+ * 
+ * @param {number} dt - Delta time in seconds since last frame
  */
-function animate() {
+function handleVRInteractions(dt) {
+    cleanIntersected();
+    
+    // Joystick movement
+    onGamePadController();
+    characterMove(dt);
+    
+    // Controllers interaction
+    intersectObjects(controller1);
+    intersectObjects(controller2);
+}
 
-    const gl = renderer.getContext();
+/**
+ * Render the main scene from the current camera viewpoint
+ * 
+ * Sets up the renderer for initial scene rendering and handles different
+ * rendering paths for VR and non-VR modes.
+ */
+function renderMainScene() {
     const isVR = renderer.xr.isPresenting;
-    const dt = clock.getDelta();
-
-    // Update tunnel animation
-    updateTunnelCylinders(dt);
-
-    // 1. render scene objects
+    
     renderer.setRenderTarget(null);
-	renderer.setClearColor(0x808080);
+    renderer.setClearColor(0x808080);
     renderer.clear();
 
-    // 1. render scene objects
     if (isVR) {
-        cleanIntersected();
-
-        if (vrMode) {
-            const xrFrame = renderer.xr.getFrame();
-            const refSpace = renderer.xr.getReferenceSpace();
-            const viewerPose = xrFrame.getViewerPose(refSpace);
-            const pL = viewerPose.views[0].transform.position;
-            const pR = viewerPose.views[1].transform.position;
-
-            const localLeftEye  = new THREE.Vector3(pL.x, pL.y, pL.z);
-            const localRightEye = new THREE.Vector3(pR.x, pR.y, pR.z);
-
-            dolly.updateMatrixWorld(true);
-            leftEye  = localLeftEye.applyMatrix4(dolly.matrixWorld);
-            rightEye = localRightEye.applyMatrix4(dolly.matrixWorld);
-        } else {
-            leftEye  = getLeftEyePosition();
-            rightEye = getRightEyePosition();
-        }
-
-        // Joystick movement
-        onGamePadController();
-        characterMove(dt);
-        
-        // Controllers interaction
-        intersectObjects(controller1);
-        intersectObjects(controller2);
-
         if (showScene) renderer.render(scene, camera);
         renderTargetSaved = renderer.getRenderTarget();
-        xrEnabledSaved = renderer.xr.enabled
-
+        xrEnabledSaved = renderer.xr.enabled;
         renderer.xr.enabled = false;
-    }
-    else {
-        renderer.setRenderTarget(null);
-        renderer.setClearColor(0x808080);
-        renderer.clear();
-
-        leftEye  = getLeftEyePosition();
-        rightEye = getRightEyePosition();
-        
+    } else {
         if (showScene) renderer.render(scene, camera);
     }
+}
 
-    // 2. render scene objects onto a texture, for each target
-    for (let [index, displaySurface] of displaySurfaces.entries())
-    {
+/**
+ * Render stereoscopic view to display surface textures
+ * 
+ * For each display surface, renders the scene from both eye positions using
+ * anaglyph color separation (left eye = red channel, right eye = green/blue channels).
+ * This creates the stereoscopic effect for the CAVE display walls.
+ * 
+ * @param {WebGLRenderingContext} gl - WebGL context for color mask manipulation
+ */
+function renderToDisplaySurfaces(gl) {
+    for (let [index, displaySurface] of displaySurfaces.entries()) {
         renderer.setRenderTarget(displaySurfaceTargets[index]);
         renderer.setClearColor(0x404040);
         renderer.clear();
 
-		// left eye on RED channel
+        // Render left eye on RED channel
         gl.colorMask(1, 0, 0, 0); 
-		var eye = leftEye;
-		var view = displaySurface.viewMatrix(eye);
-		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
-        var leftCamera = cameraFromViewProj(view, proj);
+        const leftView = displaySurface.viewMatrix(leftEye);
+        const leftProj = displaySurface.projectionMatrix(leftEye, 1, 10000);
+        const leftCamera = cameraFromViewProj(leftView, leftProj);
         renderer.render(scene, leftCamera); 
     
-		// right eye on GREEN, BLUE channels
-		gl.colorMask(0, 1, 1, 0);
-		var eye = rightEye;
-		var view = displaySurface.viewMatrix(eye);
-		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
-        var rightCamera = cameraFromViewProj(view, proj);
+        // Render right eye on GREEN and BLUE channels
+        gl.colorMask(0, 1, 1, 0);
+        const rightView = displaySurface.viewMatrix(rightEye);
+        const rightProj = displaySurface.projectionMatrix(rightEye, 1, 10000);
+        const rightCamera = cameraFromViewProj(rightView, rightProj);
         renderer.clearDepth();
         renderer.render(scene, rightCamera); 
-		
+        
+        // Restore full color mask
         gl.colorMask(1, 1, 1, 1);
     }
-    
+}
 
-    if (renderer.xr.isPresenting) {
+/**
+ * Restore renderer state after display surface rendering
+ * 
+ * Restores the render target and XR settings to their pre-rendering state,
+ * handling both VR and non-VR contexts appropriately.
+ */
+function restoreRendererState() {
+    const isVR = renderer.xr.isPresenting;
+    
+    if (isVR) {
         renderer.setRenderTarget(renderTargetSaved);
         renderer.xr.enabled = xrEnabledSaved;
-    }
-    else {
-        // Restore state
+    } else {
         renderer.setRenderTarget(null);
         renderer.setClearColor(0x000000);
     }
+}
 
-    // 3. render display surfaces as (textured) quads
+/**
+ * Render overlay elements (display surfaces, eyes, UI)
+ * 
+ * Renders the textured display surface quads, eye representations,
+ * and VR UI elements in the appropriate order.
+ */
+function renderOverlays() {
+    // Render display surfaces as textured quads
     renderer.render(displaySurfaceScene, camera);
 
-    // 4. render eyes
+    // Render eye representations
     renderer.render(eyeScene, camera);
 
-    // 5. render UI elements
+    // Render UI elements (only in VR)
     if (renderer.xr.isPresenting) {
         renderer.render(uiGroup, camera);
     }
+}
 
-    // Draw frustrum lines
+/**
+ * Update and render viewing frustum visualization
+ * 
+ * Displays the viewing frustum from the selected eye to the current display surface.
+ * The frustum visualization helps debug and understand the stereo rendering geometry.
+ * 
+ * Controlled by: showEyeFrustrum (0=off, 1=left eye, 2=right eye)
+ */
+function updateFrustumVisualization() {
+    // Clear existing frustum lines
+    for (let line of frustumLines) {
+        eyeScene.remove(line);
+    }
+    frustumLines = [];
+
+    // Draw new frustum if enabled
     if (showEyeFrustrum > 0) {
-
-        for (let line of frustumLines)
-            eyeScene.remove(line);
-        frustumLines = [];
-
         const eyePos = (showEyeFrustrum === 1) ? getLeftEyePosition() : getRightEyePosition();
-
         const lines = displaySurfaces[currentSurface].showEyeFrustrum(eyePos);
         eyeScene.add(lines);
         frustumLines.push(lines);
-
-    } else {
-        for (let line of frustumLines)
-            eyeScene.remove(line);
-        frustumLines = [];
     }
+}
 
-    // Update object if selected
+/**
+ * Update grabbed object position based on controller movement
+ * 
+ * If an object is currently grabbed by a VR controller, updates its position
+ * and orientation to follow the controller while maintaining the initial grab offset.
+ */
+function updateGrabbedObject() {
     if (selectedObject && grabbingController) {
         const world = tempMatrix2.multiplyMatrices(
             grabbingController.matrixWorld,
@@ -1143,6 +1134,55 @@ function animate() {
             selectedObject.scale
         );
     }
+}
+
+/**
+ * Main animation loop
+ * 
+ * Orchestrates the entire rendering pipeline for each frame:
+ * 1. Updates animations and eye positions
+ * 2. Handles VR interactions (if in VR mode)
+ * 3. Renders main scene
+ * 4. Renders stereoscopic views to display surfaces
+ * 5. Renders overlay elements (surfaces, eyes, UI)
+ * 6. Updates debug visualizations (frustum)
+ * 7. Updates grabbed objects
+ * 
+ * Called automatically by the browser's requestAnimationFrame or WebXR frame loop.
+ */
+function animate() {
+    const gl = renderer.getContext();
+    const isVR = renderer.xr.isPresenting;
+    const dt = clock.getDelta();
+
+    // Update animations
+    updateTunnelCylinders(dt);
+
+    // Update eye positions based on mode
+    updateEyePositions();
+
+    // Handle VR-specific interactions
+    if (isVR) {
+        handleVRInteractions(dt);
+    }
+
+    // Render main scene
+    renderMainScene();
+
+    // Render stereoscopic views to display surfaces
+    renderToDisplaySurfaces(gl);
+
+    // Restore renderer state
+    restoreRendererState();
+
+    // Render overlay elements
+    renderOverlays();
+
+    // Update debug visualizations
+    updateFrustumVisualization();
+
+    // Update grabbed objects
+    updateGrabbedObject();
 }
 
 window.addEventListener( 'keydown', function ( event ) 
