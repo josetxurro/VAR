@@ -457,6 +457,7 @@ MonoBehaviour:
   _rigidbody: {fileID: 4389225464553093158}
   _kinematicWhileSelected: 1
   _throwWhenUnselected: 1
+  _forceKinematicDisabled: 0
 --- !u!96 &3085919523549705728
 TrailRenderer:
   serializedVersion: 3
@@ -568,7 +569,7 @@ TrailRenderer:
     textureScale: {x: 1, y: 1}
     shadowBias: 0.5
     generateLightingData: 0
-  m_MinVertexDistance: 0.1
+  m_MinVertexDistance: 0.01
   m_MaskInteraction: 0
   m_Autodestruct: 0
   m_Emitting: 1
