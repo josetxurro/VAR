@@ -4,6 +4,11 @@ using UnityEngine;
 
 public class RestartButton : MonoBehaviour
 {
+    public void OnButtonPressed()
+    {
+        Debug.Log("🟢 UI BUTTON PRESSED!");
+    }
+    
     public void RestartGame()
     {
         Debug.Log("🔄 Game Restarted");
